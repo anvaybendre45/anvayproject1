@@ -1,0 +1,177 @@
+import os
+import json
+import logging
+from typing import Dict, Any, List
+from pydantic import BaseModel, Field
+from google import genai
+from google.genai import types
+
+# Setup clean visual logging to watch the pipeline execute in real time
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - [%(levelname)s] - %(message)s")
+
+# -------------------------------------------------------------------
+# 1. DEFINE TARGET JSON STRUCTURE
+# -------------------------------------------------------------------
+class OrderItem(BaseModel):
+    brand: str = Field(description="The brand name or generic drug molecule name mentioned by the user.")
+    qty: int = Field(description="The numeric quantity ordered. Default to 5 if the chemist did not mention a number.")
+
+class PharmacyOrderList(BaseModel):
+    items: List[OrderItem]
+
+# -------------------------------------------------------------------
+# 2. LOCAL CROSS-REFERENCE DATA
+# -------------------------------------------------------------------
+# Brand name mapping to universal active ingredients (Generic Molecules)
+BRAND_TO_GENERIC = {
+    "pantocid": "Pantoprazole",
+    "pan-d": "Pantoprazole + Domperidone",
+    "calpol": "Paracetamol",
+    "crocin": "Paracetamol",
+    "augmentin": "Amoxicillin Clavulanate",
+    "avil": "Pheniramine Maleate"
+}
+
+# -------------------------------------------------------------------
+# 3. CORE PREDICTIVE ENGINE
+# -------------------------------------------------------------------
+class DawaDostBrain:
+    def __init__(self):
+        # Auto-discovers the GEMINI_API_KEY environment variable
+        if "GEMINI_API_KEY" not in os.environ:
+            logging.warning("GEMINI_API_KEY environment variable not found. The application may fail.")
+        self.client = genai.Client()
+        self.model_id = "gemini-2.5-flash"
+
+    def parse_whatsapp_input(self, text_input: str) -> Dict[str, int]:
+        """
+        Uses Gemini 2.5 Flash with native Structured Outputs to securely 
+        strip out chat noise and convert messy text inputs into validated inventory lists.
+        """
+        logging.info("Sending text to Gemini 2.5 Flash for extraction...")
+        
+        system_instruction = (
+            "You are a medical inventory assistant working with local Indian pharmacies. "
+            "Extract the medications mentioned and their target quantities. If the text "
+            "uses a colloquial brand name, extract it exactly as written."
+        )
+
+        try:
+            response = self.client.models.generate_content(
+                model=self.model_id,
+                contents=f"Extract this order: {text_input}",
+                config=types.GenerateContentConfig(
+                    system_instruction=system_instruction,
+                    response_mime_type="application/json",
+                    response_schema=PharmacyOrderList,
+                    temperature=0.0  # Zero out creativity for maximum structural accuracy
+                ),
+            )
+            
+            # The SDK guarantees response.text adheres to our schema structure
+            parsed_json = json.loads(response.text)
+            logging.info(f"Gemini Raw Struct Response: {parsed_json}")
+            
+            # Clean and map the brands to standard cross-reference generics
+            mapped_orders = {}
+            for item in parsed_json.get("items", []):
+                brand_clean = item["brand"].lower().strip()
+                quantity = item["qty"]
+                
+                # Check mapping dictionary, default to Title Case if not present
+                generic_name = BRAND_TO_GENERIC.get(brand_clean, item["brand"].title())
+                mapped_orders[generic_name] = mapped_orders.get(generic_name, 0) + quantity
+                
+            return mapped_orders
+
+        except Exception as e:
+            logging.error(f"Failed parsing via Gemini: {e}")
+            return {}
+
+    def fetch_hyperlocal_environmental_data(self, pincode: str) -> Dict[str, Any]:
+        """
+        Simulates querying weather and disease prediction vectors based on location.
+        In production, replace this block with an active HTTP request to an external service.
+        """
+        logging.info(f"Fetching hyper-local environmental logs for Pincode: {pincode}")
+        return {
+            "pincode": pincode,
+            "current_season": "Pre-Monsoon",
+            "rain_forecast_next_7_days": True,
+            "avg_temp_celsius": 32
+        }
+
+    def run_predictive_rules(self, history: Dict[str, int], environment: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Cross-checks current inbound sales trends against upcoming hyper-local health risk triggers.
+        """
+        logging.info("Evaluating local epidemiological business rules...")
+        recommendations = {}
+        
+        # Scenario: Pre-Monsoon Rain Trigger -> Enteric (Stomach/Waterborne) Spikes
+        if environment.get("rain_forecast_next_7_days") and environment.get("current_season") == "Pre-Monsoon":
+            # If they are currently buying antacids/digestive aids, preemptively secure high-margin enteric anti-infectives
+            if "Pantoprazole" in history or "Pantoprazole + Domperidone" in history:
+                recommendations["Ofloxacin + Ornidazole (Generic Enteric Antibiotic)"] = {
+                    "reason": "Monsoon onset predicted in your area within 7 days. Waterborne gastrointestinal issues typically surge by 35%.",
+                    "suggested_quantity": 10,
+                    "market_price_status": "Standard (Lock in rate before regional price spikes)"
+                }
+                
+        # Scenario: Winter Vector Trigger -> Cold and Flu Respiratory Spikes
+        if environment.get("avg_temp_celsius", 30) < 20:
+            recommendations["Levocetirizine + Montelukast (Generic Cold/Allergy)"] = {
+                "reason": "Sudden local temperature drop detected. Expect upcoming respiratory and seasonal cold surges.",
+                "suggested_quantity": 15,
+                "market_price_status": "Standard"
+            }
+            
+        return recommendations
+
+    def generate_whatsapp_outbox_payload(self, chemist_name: str, recommendations: Dict[str, Any]) -> str:
+        """
+        Transforms abstract predictive data structures into a clean, human-readable
+        conversational interface message meant for deployment directly over messaging platforms.
+        """
+        if not recommendations:
+            return f"Hi {chemist_name}, your local store inventory looks well-optimized for the upcoming week."
+            
+        message = f"Hi {chemist_name}! 🚨 Quick smart-inventory alert from DawaDost:\n\n"
+        for med, details in recommendations.items():
+            message += f"📦 *{med}*\n"
+            message += f"💡 _Why:_ {details['reason']}\n"
+            message += f"📉 _Price:_ {details['market_price_status']}\n"
+            message += f"👉 *Suggested Pre-book:* {details['suggested_quantity']} boxes\n\n"
+            
+        message += "Reply *1* to instantly approve and lock in this inventory at today's rates."
+        return message
+
+
+# -------------------------------------------------------------------
+# 4. RUN PIPELINE TEST
+# -------------------------------------------------------------------
+if __name__ == "__main__":
+    # Initialize the integrated brain instance
+    engine = DawaDostBrain()
+    
+    # Simulate a messy message sent over a WhatsApp Webhook by a busy shopkeeper
+    mock_whatsapp_input = "Hey team need to order 5 boxes of pantocid, also send over 2 packs of calpol asap."
+    print(f"\n[STEP 1: USER INPUT] Received Raw String:\n\"{mock_whatsapp_input}\"\n")
+    
+    # Process Extraction
+    extracted_inventory = engine.parse_whatsapp_input(mock_whatsapp_input)
+    print(f"\n[STEP 2: LLM PARSED & DB MAPPED RESULT]:\n{extracted_inventory}\n")
+    
+    # Pull Location Environmental contexts
+    local_metrics = engine.fetch_hyperlocal_environmental_data(pincode="400001")
+    
+    # Execute Rule Computations
+    smart_predictions = engine.run_predictive_rules(history=extracted_inventory, environment=local_metrics)
+    
+    # Build outbound interaction interface string
+    final_alert_text = engine.generate_whatsapp_outbox_payload(chemist_name="Ramesh Kumar", recommendations=smart_predictions)
+    
+    print("\n[STEP 3: OUTBOUND WHATSAPP INTERFACE TEXT OUTPUT]:")
+    print("-----------------------------------------------------------------")
+    print(final_alert_text)
+    print("-----------------------------------------------------------------\n")
