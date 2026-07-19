@@ -45,8 +45,7 @@ class InventoryEngine:
     def __init__(self):
         # Initializing client natively via environment variable
         self.client = genai.Client()
-        self.model_id = "self.model_id = "gemini-2.5-flash"
-
+        self.model_id = "gemini-3.1-flash-lite"
     def parse_text(self, text: str) -> Dict[str, int]:
         system_instruction = "Extract medications and quantities. If a brand name is used, extract it exactly."
         try:
